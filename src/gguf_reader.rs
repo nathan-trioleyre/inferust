@@ -148,7 +148,6 @@ impl<'a> GgufReader {
         let header = self.read_header()?;
         let tensor_infos = self.read_tensor_infos(header.tensor_count)?;
 
-        // Validate quantization_version: required if any tensor is quantized.
         let is_quantized = tensor_infos.values().any(|info| {
             !matches!(
                 info.ggml_type,
@@ -164,7 +163,9 @@ impl<'a> GgufReader {
         });
 
         if is_quantized && header.quantization_version.is_none() {
-            bail!("Missing required key 'general.quantization_version' (required because the model contains quantized tensors)");
+            bail!(
+                "Missing required key 'general.quantization_version' (required because the model contains quantized tensors)"
+            );
         }
 
         let _padding = self.read_padding(header.alignment as usize)?;
@@ -180,8 +181,6 @@ impl<'a> GgufReader {
 
     fn read_header(&mut self) -> Result<GgufHeader> {
         let magic = self.b_reader.read_u32()?;
-
-        println!("{} {}", magic, GGUF_MAGIC);
 
         if magic != GGUF_MAGIC {
             bail!(
@@ -229,17 +228,11 @@ impl<'a> GgufReader {
             _ => bail!("Missing required key 'general.architecture' (expected string)"),
         };
 
-        println!("arch: {}", architecture);
-
         let quantization_version = match metadata_kv.get("general.quantization_version") {
             Some(GgufMetadataValue::U32(version)) => Some(*version),
             None => None,
             _ => bail!("Invalid key 'general.quantization_version': expected U32"),
         };
-
-        if let Some(v) = quantization_version {
-            println!("v: {}", v);
-        }
 
         let alignment = match metadata_kv.get("general.alignment") {
             Some(GgufMetadataValue::U32(alignment)) => {
@@ -254,8 +247,6 @@ impl<'a> GgufReader {
             Some(_) => bail!("Invalid key 'general.alignment': expected U32"),
             _ => 32,
         };
-
-        println!("al: {}", alignment);
 
         Ok(GgufHeader {
             magic,
