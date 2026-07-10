@@ -138,3 +138,37 @@ impl BReader {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use memmap2::MmapMut;
+
+    #[test]
+    fn test_read_numeric_and_string() -> Result<()> {
+        let mut mmap = MmapMut::map_anon(100)?;
+        mmap[0] = 42;
+        mmap[1] = -10i8 as u8;
+        mmap[2..4].copy_from_slice(&1000u16.to_le_bytes());
+        mmap[4..8].copy_from_slice(&0x12345678u32.to_le_bytes());
+        mmap[8..12].copy_from_slice(&1.5f32.to_le_bytes());
+        mmap[12..20].copy_from_slice(&5u64.to_le_bytes());
+        mmap[20..25].copy_from_slice(b"hello");
+
+        let readonly_mmap = mmap.make_read_only()?;
+        let mut reader = BReader::new(readonly_mmap);
+
+        assert_eq!(reader.read_u8()?, 42);
+        assert_eq!(reader.read_i8()?, -10);
+        assert_eq!(reader.read_u16()?, 1000);
+        assert_eq!(reader.read_u32()?, 0x12345678);
+        assert_eq!(reader.read_f32()?, 1.5);
+        assert_eq!(reader.read_string()?, "hello");
+        assert_eq!(reader.position, 25);
+
+        // Test out of bounds
+        assert!(reader.read_bytes(100).is_err());
+
+        Ok(())
+    }
+}

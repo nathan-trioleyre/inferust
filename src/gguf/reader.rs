@@ -3,119 +3,13 @@ use std::{collections::HashMap, fs::File, path::Path};
 use anyhow::{Result, bail};
 use memmap2::MmapOptions;
 
-use crate::binary_reader::BReader;
-
-const GGUF_MAGIC: u32 = 0x46554747;
-const GGUF_CURRENT_VERSION: u32 = 3;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GgmlType {
-    F32 = 0,
-    F16 = 1,
-    Q4_0 = 2,
-    Q4_1 = 3,
-    Q5_0 = 6,
-    Q5_1 = 7,
-    Q8_0 = 8,
-    Q8_1 = 9,
-    Q2K = 10,
-    Q3K = 11,
-    Q4K = 12,
-    Q5K = 13,
-    Q6K = 14,
-    Q8K = 15,
-    Iq2Xxs = 16,
-    Iq2Xs = 17,
-    Iq3Xxs = 18,
-    Iq1S = 19,
-    Iq4Nl = 20,
-    Iq3S = 21,
-    Iq2S = 22,
-    Iq4Xs = 23,
-    I8 = 24,
-    I16 = 25,
-    I32 = 26,
-    I64 = 27,
-    F64 = 28,
-    Iq1M = 29,
-    Bf16 = 30,
-    Tq1_0 = 34,
-    Tq2_0 = 35,
-    Mxfp4 = 39,
-    Count = 40,
-}
-
-impl TryFrom<u32> for GgmlType {
-    type Error = anyhow::Error;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(GgmlType::F32),
-            1 => Ok(GgmlType::F16),
-            2 => Ok(GgmlType::Q4_0),
-            3 => Ok(GgmlType::Q4_1),
-            6 => Ok(GgmlType::Q5_0),
-            7 => Ok(GgmlType::Q5_1),
-            8 => Ok(GgmlType::Q8_0),
-            9 => Ok(GgmlType::Q8_1),
-            10 => Ok(GgmlType::Q2K),
-            11 => Ok(GgmlType::Q3K),
-            12 => Ok(GgmlType::Q4K),
-            13 => Ok(GgmlType::Q5K),
-            14 => Ok(GgmlType::Q6K),
-            15 => Ok(GgmlType::Q8K),
-            16 => Ok(GgmlType::Iq2Xxs),
-            17 => Ok(GgmlType::Iq2Xs),
-            18 => Ok(GgmlType::Iq3Xxs),
-            19 => Ok(GgmlType::Iq1S),
-            20 => Ok(GgmlType::Iq4Nl),
-            21 => Ok(GgmlType::Iq3S),
-            22 => Ok(GgmlType::Iq2S),
-            23 => Ok(GgmlType::Iq4Xs),
-            24 => Ok(GgmlType::I8),
-            25 => Ok(GgmlType::I16),
-            26 => Ok(GgmlType::I32),
-            27 => Ok(GgmlType::I64),
-            28 => Ok(GgmlType::F64),
-            29 => Ok(GgmlType::Iq1M),
-            30 => Ok(GgmlType::Bf16),
-            34 => Ok(GgmlType::Tq1_0),
-            35 => Ok(GgmlType::Tq2_0),
-            39 => Ok(GgmlType::Mxfp4),
-            40 => Ok(GgmlType::Count),
-            _ => bail!("Unsupported ggml type: {}", value),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum GgufMetadataValue {
-    U8(u8),
-    I8(i8),
-    U16(u16),
-    I16(i16),
-    U32(u32),
-    I32(i32),
-    F32(f32),
-    Boolean(bool),
-    String(String),
-    Array(Vec<GgufMetadataValue>),
-    U64(u64),
-    I64(i64),
-    F64(f64),
-}
-
-#[derive(Debug)]
-pub struct GgufHeader {
-    pub magic: u32,
-    pub version: u32,
-    pub tensor_count: u64,
-    pub metadata_kv_count: u64,
-    pub metadata_kv: HashMap<String, GgufMetadataValue>,
-    pub architecture: String,
-    pub quantization_version: Option<u32>,
-    pub alignment: u32,
-}
+use crate::{
+    binary_reader::BReader,
+    gguf::{
+        ggml::GgmlType,
+        header::{GGUF_CURRENT_VERSION, GGUF_MAGIC, GgufHeader, GgufMetadataValue},
+    },
+};
 
 pub struct GgufTensorInfo {
     pub n_dimensions: u32,
@@ -331,3 +225,54 @@ impl<'a> GgufReader {
         Ok(self.b_reader.read_bytes(remaining_bytes)?.to_vec())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_read_minimal_gguf() -> Result<()> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x46554747u32.to_le_bytes()); // magic
+        bytes.extend_from_slice(&3u32.to_le_bytes());          // version
+        bytes.extend_from_slice(&0u64.to_le_bytes());          // tensor count
+        bytes.extend_from_slice(&1u64.to_le_bytes());          // metadata KV count
+
+        // Metadata KV: "general.architecture" = "llama"
+        let key = "general.architecture";
+        bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(key.as_bytes());
+
+        bytes.extend_from_slice(&8u32.to_le_bytes()); // Type ID 8: String
+
+        let val = "llama";
+        bytes.extend_from_slice(&(val.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(val.as_bytes());
+
+        // Pad the file bytes to align with 32-byte boundary, and add dummy tensor data
+        let alignment = 32;
+        let padding_needed = (alignment - (bytes.len() % alignment)) % alignment;
+        bytes.extend(std::iter::repeat(0).take(padding_needed));
+        bytes.extend_from_slice(b"tensor-payload");
+
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("minimal_test.gguf");
+        fs::write(&file_path, bytes)?;
+
+        let mut reader = GgufReader::new(&file_path)?;
+        let gguf_file = reader.read()?;
+
+        assert_eq!(gguf_file.header.magic, 0x46554747);
+        assert_eq!(gguf_file.header.version, 3);
+        assert_eq!(gguf_file.header.architecture, "llama");
+        assert_eq!(gguf_file.header.alignment, 32);
+        assert_eq!(gguf_file.tensor_infos.len(), 0);
+        assert_eq!(gguf_file.tensor_data, b"tensor-payload");
+
+        // Clean up
+        let _ = fs::remove_file(file_path);
+        Ok(())
+    }
+}
+

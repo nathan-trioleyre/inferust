@@ -2,18 +2,26 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::gguf_reader::GgufReader;
+use crate::{
+    gguf::reader::GgufReader,
+    token::{bpe::BpeTokenizer, tokenizer::Tokenizer},
+};
 
 mod binary_reader;
-mod gguf_reader;
+mod gguf;
+mod token;
 
 fn main() -> Result<()> {
-    let path = Path::new("data/qwen1_5-0_5b-chat-q4_k_m.gguf");
+    let path = Path::new("data/Llama-3.2-3B-Instruct-Q8_0.gguf");
     let mut reader = GgufReader::new(&path)?;
 
-	let gguf = reader.read()?;
+    let gguf = reader.read()?;
+    let tokenizer = BpeTokenizer::new(&gguf.header.metadata_kv)?;
 
-	println!("{:?}", gguf.header.metadata_kv.keys());
+    let encoded = tokenizer.encode("Hello, World!")?;
+
+    println!("{:?}", encoded);
+    println!("{}", tokenizer.decode(&encoded)?);
 
     Ok(())
 }
